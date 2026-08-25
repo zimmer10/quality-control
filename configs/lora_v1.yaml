@@ -1,0 +1,13 @@
+base_model: Qwen/Qwen3-VL-2B-Instruct
+dataset_path: annotations/lora_v1.jsonl
+folds_path: data/processed/folds.parquet
+output_dir: artifacts/lora_v1
+oof_path: oof/lora_v1.parquet
+
+training:
+  seed: 42
+  folds: 3
+  rank: 16
+  alpha: 32
+  dropout: 0.05
+

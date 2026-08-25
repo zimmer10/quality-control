@@ -1,0 +1,2 @@
+"""Frozen multimodal embedding extraction."""
+

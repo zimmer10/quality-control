@@ -1,0 +1,17 @@
+seed: 42
+
+validation:
+  folds_path: data/processed/folds.parquet
+
+text:
+  word_ngram_range: [1, 2]
+  char_ngram_range: [3, 5]
+
+models:
+  linear_svc: true
+  logistic_regression: true
+
+output:
+  oof_path: oof/fast.parquet
+  artifacts_dir: artifacts/fast
+

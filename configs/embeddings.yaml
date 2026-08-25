@@ -1,0 +1,11 @@
+model: Qwen/Qwen3-VL-Embedding-2B
+images_manifest: data/processed/image_manifest.parquet
+folds_path: data/processed/folds.parquet
+cache_dir: cache/embeddings
+features_path: features/embeddings.parquet
+oof_path: oof/expensive.parquet
+
+retrieval:
+  fold_safe: true
+  neighbors: [3, 5, 10]
+

@@ -1,0 +1,10 @@
+thresholds_path: artifacts/thresholds.json
+explanation_templates_path: artifacts/explanation_templates.json
+shared_models_env: SHARED_MODELS_PATH
+shared_models_default: /shared_models
+
+output:
+  columns: [id, result]
+  comment_min_chars: 50
+  comment_max_chars: 300
+

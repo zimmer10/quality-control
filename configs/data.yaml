@@ -1,0 +1,16 @@
+seed: 42
+n_splits: 5
+
+paths:
+  train_csv: data/raw/data.csv
+  images_dir: data/raw/images
+  manifest: data/processed/manifest.parquet
+  folds: data/processed/folds.parquet
+
+columns:
+  id: id
+  name: name
+  description: description
+  category: category
+  label: label
+

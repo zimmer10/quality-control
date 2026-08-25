@@ -1,0 +1,12 @@
+seed: 42
+
+inputs:
+  fast_oof: oof/fast.parquet
+  expensive_oof: oof/expensive.parquet
+  lora_v2_oof: oof/lora_v2.parquet
+
+outputs:
+  router_1_oof: oof/router_1.parquet
+  router_2_oof: oof/router_2.parquet
+  artifacts_dir: artifacts/routers
+

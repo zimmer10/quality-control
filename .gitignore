@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments and local settings
+.venv/
+venv/
+.env
+.env.*
+
+# IDE and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local competition data and generated artifacts
+data/*
+!data/README.md
+
+cache/*
+!cache/README.md
+
+features/*
+!features/README.md
+
+annotations/*
+!annotations/README.md
+
+oof/*
+!oof/README.md
+
+artifacts/*
+!artifacts/README.md
+
+# Model and dataset formats
+*.safetensors
+*.bin
+*.ckpt
+*.pt
+*.pth
+*.onnx
+*.npy
+*.npz
+*.parquet
+*.jsonl
+
+# Submission and Docker archives
+*.zip
+*.tar
+*.tar.gz
+

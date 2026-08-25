@@ -1,0 +1,6 @@
+model: PaddlePaddle/PaddleOCR-VL-1.5
+images_manifest: data/processed/image_manifest.parquet
+cache_dir: cache/ocr
+output_path: features/ocr_text.parquet
+resume: true
+
