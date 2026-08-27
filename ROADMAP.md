@@ -21,7 +21,7 @@ Backlog → Ready → In Progress → Review → Done
 |---|---|---|---|---|
 | R01 | Создать структуру проекта и окружение | — | любая | Done |
 | R02 | Реализовать метрику соревнования | R01 | data | Done |
-| R03 | Провести аудит `data.csv` | R01 | data | Backlog |
+| R03 | Провести аудит `data.csv` | R01 | data | Done |
 | R04 | Найти дубли и создать `group_id` | R03 | data | Backlog |
 | R05 | Создать и зафиксировать `folds.parquet` | R02, R04 | data | Backlog |
 | R06 | Проверить изображения и создать image manifest | R01 | multimodal | Backlog |
