@@ -4,12 +4,14 @@
 
 ## Текущий статус
 
-Создан каркас проекта и правила совместной разработки. Обучение моделей ещё не начато.
+Завершены подготовительные этапы R01–R06: метрика, аудит данных, группы дублей, folds и image manifest. Обучение моделей ещё не начато.
 
 ## Документы
 
 - [`COMPETITION_CONDITIONS.md`](COMPETITION_CONDITIONS.md) — технически значимые условия соревнования.
 - [`ROADMAP.md`](ROADMAP.md) — задачи, зависимости и контрольные точки.
+- [`PIPELINE.md`](PIPELINE.md) — целевая архитектура и порядок построения решения.
+- [`pipeline.drawio`](pipeline.drawio) — схемы обучения и инференса.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — правила работы с задачами, ветками и Pull Request.
 - [`reports/experiments.md`](reports/experiments.md) — журнал экспериментов.
 
