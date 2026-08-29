@@ -1,0 +1,85 @@
+version: 1
+unknown_value: unknown
+
+sources:
+  name:
+    requires_text: true
+    requires_image_index: false
+  description:
+    requires_text: true
+    requires_image_index: false
+  ocr:
+    requires_text: true
+    requires_image_index: true
+  image:
+    requires_text: false
+    requires_image_index: true
+
+categories:
+  БАД:
+    fields:
+      explicit_bad_marker:
+        type: tri_state
+        description: Прямое указание, что товар является БАД.
+      dietary_supplement_marker:
+        type: tri_state
+        description: Маркировка dietary supplement.
+      explicit_not_bad:
+        type: tri_state
+        description: Явное указание, что товар не является БАД.
+      sport_nutrition:
+        type: tri_state
+        description: Прямое указание на спортивное питание.
+      marker_source:
+        type: enum
+        allowed_values: [name, description, ocr, image, unknown]
+        description: Источник найденной маркировки БАД.
+    rule_ids:
+      - EXPLICIT_BAD_MARKER
+      - DIETARY_SUPPLEMENT_MARKER
+      - EXPLICIT_NOT_BAD
+      - SPORT_NUTRITION
+      - NO_BAD_MARKER
+      - INSUFFICIENT_EVIDENCE
+
+  Легковоспламеняющиеся:
+    fields:
+      object_type:
+        type: enum
+        allowed_values:
+          - independent_ignition_source
+          - combustible_content
+          - device_requiring_external_fuel
+          - device_with_embedded_ignition
+          - flammable_component
+          - kit
+          - other
+          - unknown
+        description: Тип объекта относительно правил воспламеняемости.
+      fuel_present:
+        type: tri_state
+        description: В товаре присутствует горючее вещество или газ.
+      fuel_included:
+        type: tri_state
+        description: Горючее содержимое входит в продаваемый комплект.
+      requires_external_fuel:
+        type: tri_state
+        description: Для работы требуется внешний источник топлива.
+      independent_ignition_source:
+        type: tri_state
+        description: Товар является самостоятельным источником воспламенения.
+      flammable_item_in_kit:
+        type: tri_state
+        description: В комплект входит отдельный легковоспламеняющийся товар.
+      explicit_without_fuel:
+        type: tri_state
+        description: Явно указано отсутствие топлива или горючего содержимого.
+    rule_ids:
+      - INDEPENDENT_IGNITION_SOURCE
+      - FLAMMABLE_CONTENT
+      - FLAMMABLE_ITEM_IN_KIT
+      - DEVICE_WITHOUT_INCLUDED_FUEL
+      - DEVICE_WITH_EMBEDDED_IGNITION
+      - FLAMMABLE_COMPONENT_ONLY
+      - NO_FLAMMABLE_CONTENT
+      - INSUFFICIENT_EVIDENCE
