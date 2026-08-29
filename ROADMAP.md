@@ -27,7 +27,7 @@ Backlog → Ready → In Progress → Review → Done
 | R06 | Проверить изображения и создать image manifest | R01 | multimodal | Done |
 | R07 | Найти визуальные дубли | R06 | multimodal | Done |
 | R08 | Зафиксировать evidence schema | R03 | shared | Done |
-| R09 | Реализовать Text Rules | R05, R08 | data | Backlog |
+| R09 | Реализовать Text Rules | R05, R08 | data | Done |
 | R10 | Получить `oof/fast.parquet` | R05, R09 | data | Backlog |
 | R11 | Реализовать кешируемый OCR | R06 | multimodal | Backlog |
 | R12 | Реализовать OCR Rules | R08, R11 | multimodal | Backlog |
@@ -62,4 +62,3 @@ Backlog → Ready → In Progress → Review → Done
 | G8 | OOF Router 1/2: корректные входы и targets |
 | G9 | `oof/meta.parquet`: итоговая OOF-метрика и routing simulation |
 | G10 | Docker: автономность, формат ответа и лимит времени |
-
