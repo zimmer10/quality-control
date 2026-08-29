@@ -1,4 +1,9 @@
+version: 1
 seed: 42
+
+input:
+  data_path: data/raw/data.csv
+  text_rules_path: features/text_rules.parquet
 
 validation:
   folds_path: data/processed/folds.parquet
@@ -6,12 +11,21 @@ validation:
 text:
   word_ngram_range: [1, 2]
   char_ngram_range: [3, 5]
+  word_min_df: 2
+  char_min_df: 2
+  word_max_features: 80000
+  char_max_features: 120000
+  sublinear_tf: true
 
 models:
-  linear_svc: true
-  logistic_regression: true
+  linear_svc_c: 1.0
+  logistic_regression_c: 1.0
+  logistic_max_iter: 500
+  class_weight_by_category:
+    БАД: null
+    Легковоспламеняющиеся: balanced
 
 output:
   oof_path: oof/fast.parquet
   artifacts_dir: artifacts/fast
-
+  report_path: reports/R10-fast-oof.md
