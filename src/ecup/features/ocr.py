@@ -11,7 +11,7 @@ import re
 import time
 import unicodedata
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -281,14 +281,12 @@ class TransformersOCRBackend:
         try:
             self._processor = AutoProcessor.from_pretrained(
                 source,
-                trust_remote_code=True,
                 local_files_only=self._config.local_files_only,
             )
             self._model = AutoModelForImageTextToText.from_pretrained(
                 source,
-                trust_remote_code=True,
                 local_files_only=self._config.local_files_only,
-                torch_dtype=dtype,
+                dtype=dtype,
             ).to(device)
         except Exception as error:
             raise OCRBackendUnavailableError(
@@ -311,6 +309,10 @@ class TransformersOCRBackend:
                 ],
             }
         ]
+        image_processor = self._processor.image_processor
+        shortest_edge = getattr(image_processor, "min_pixels", None)
+        if shortest_edge is None:
+            shortest_edge = image_processor.size.shortest_edge
         inputs = self._processor.apply_chat_template(
             messages,
             add_generation_prompt=True,
@@ -319,7 +321,7 @@ class TransformersOCRBackend:
             return_tensors="pt",
             images_kwargs={
                 "size": {
-                    "shortest_edge": self._processor.image_processor.min_pixels,
+                    "shortest_edge": shortest_edge,
                     "longest_edge": self._config.max_pixels,
                 }
             },
@@ -648,6 +650,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--report", type=Path)
     parser.add_argument("--limit", type=int)
+    parser.add_argument("--max-pixels", type=int)
+    parser.add_argument("--max-new-tokens", type=int)
     parser.add_argument("--no-resume", action="store_true")
     return parser
 
@@ -655,6 +659,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = load_ocr_config(args.config)
+    for name, value in (
+        ("max_pixels", args.max_pixels),
+        ("max_new_tokens", args.max_new_tokens),
+    ):
+        if value is not None:
+            if value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+            config = replace(config, **{name: value})
     manifest_path = args.manifest or config.paths.images_manifest
     images_root = args.images_root or config.paths.images_root
     cache_dir = args.cache_dir or config.paths.cache_dir
