@@ -3,12 +3,15 @@ from __future__ import annotations
 import re
 
 import polars as pl
+import ecup.data.groups as groups_module
+
 import pytest
 
 from ecup.data.groups import (
     GROUP_COLUMNS,
     build_group_artifacts,
     build_group_mapping,
+    merge_visual_groups,
     main,
     validate_group_mapping,
 )
@@ -95,6 +98,101 @@ def test_label_conflict_is_scoped_to_category() -> None:
     assert rows[13]["label_conflict"] is False
     assert artifacts.conflicts.get_column("id").to_list() == [10, 11, 12]
     assert artifacts.conflicts.columns == artifacts.mapping.columns
+
+
+def test_confirmed_visual_pairs_merge_text_groups_transitively() -> None:
+    source = sample_frame()
+    visual_pairs = pl.DataFrame(
+        {
+            "left_id": [14, 20, 30],
+            "right_id": [20, 21, 14],
+            "auto_merge": [True, True, False],
+        }
+    )
+
+    artifacts = build_group_artifacts(source, visual_pairs)
+    rows = rows_by_id(artifacts.mapping)
+
+    merged_ids = {rows[item_id]["group_id"] for item_id in (14, 20, 21)}
+    assert len(merged_ids) == 1
+    assert rows[14]["group_size"] == 3
+    assert rows[14]["duplicate_kind"] == "mixed"
+    assert rows[30]["group_id"] not in merged_ids
+
+
+def test_visual_merge_recalculates_category_scoped_conflicts() -> None:
+    source = sample_frame()
+    visual_pairs = pl.DataFrame(
+        {
+            "left_id": [14],
+            "right_id": [30],
+            "auto_merge": [True],
+        }
+    )
+
+    artifacts = build_group_artifacts(source, visual_pairs)
+    rows = rows_by_id(artifacts.mapping)
+
+    assert rows[14]["duplicate_kind"] == "visual"
+    assert rows[14]["label_conflict"] is True
+    assert rows[30]["label_conflict"] is True
+
+
+def test_visual_pairs_with_unknown_ids_are_rejected() -> None:
+    visual_pairs = pl.DataFrame(
+        {
+            "left_id": [14],
+            "right_id": [999],
+            "auto_merge": [True],
+        }
+    )
+
+    with pytest.raises(ValueError, match="unknown ids"):
+        build_group_artifacts(sample_frame(), visual_pairs)
+
+
+def test_final_group_hash_collisions_are_rejected(monkeypatch) -> None:
+    mapping = build_group_mapping(sample_frame())
+    visual_pairs = pl.DataFrame(
+        {
+            "left_id": [14, 30],
+            "right_id": [20, 10],
+            "auto_merge": [True, True],
+        }
+    )
+    monkeypatch.setattr(groups_module, "stable_group_id", lambda value: "g_same")
+
+    with pytest.raises(RuntimeError, match="final group_id hash collision"):
+        merge_visual_groups(mapping, visual_pairs)
+
+
+def test_cli_accepts_confirmed_visual_pairs(tmp_path) -> None:
+    input_path = tmp_path / "data.csv"
+    groups_path = tmp_path / "duplicate_groups.parquet"
+    conflicts_path = tmp_path / "label_conflicts.parquet"
+    visual_path = tmp_path / "visual_duplicates.parquet"
+    report_path = tmp_path / "R04-groups.md"
+    sample_frame().write_csv(input_path)
+    pl.DataFrame(
+        {"left_id": [14], "right_id": [20], "auto_merge": [True]}
+    ).write_parquet(visual_path)
+
+    exit_code = main(
+        [
+
+            "--input", str(input_path),
+            "--visual-pairs", str(visual_path),
+            "--groups-output", str(groups_path),
+            "--conflicts-output", str(conflicts_path),
+            "--report", str(report_path),
+        ]
+    )
+
+    assert exit_code == 0
+    mapping = pl.read_parquet(groups_path)
+    rows = rows_by_id(mapping)
+    assert rows[14]["group_id"] == rows[20]["group_id"]
+    assert rows[14]["duplicate_kind"] == "mixed"
 
 
 def test_group_ids_do_not_depend_on_input_order() -> None:
