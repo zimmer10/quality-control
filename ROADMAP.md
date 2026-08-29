@@ -25,7 +25,7 @@ Backlog → Ready → In Progress → Review → Done
 | R04 | Найти дубли и создать `group_id` | R03 | data | Done |
 | R05 | Создать и зафиксировать `folds.parquet` | R02, R04 | data | Done |
 | R06 | Проверить изображения и создать image manifest | R01 | multimodal | Done |
-| R07 | Найти визуальные дубли | R06 | multimodal | Backlog |
+| R07 | Найти визуальные дубли | R06 | multimodal | Done |
 | R08 | Зафиксировать evidence schema | R03 | shared | Backlog |
 | R09 | Реализовать Text Rules | R05, R08 | data | Backlog |
 | R10 | Получить `oof/fast.parquet` | R05, R09 | data | Backlog |

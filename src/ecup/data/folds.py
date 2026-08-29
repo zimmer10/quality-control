@@ -12,6 +12,7 @@ from typing import Sequence
 import numpy as np
 import polars as pl
 import yaml
+from sklearn.model_selection import StratifiedGroupKFold
 
 FOLD_COLUMNS = ("id", "category", "label", "group_id", "fold")
 SOURCE_COLUMNS = ("id", "category", "label")
@@ -105,93 +106,45 @@ def validate_fold_inputs(
         raise ValueError("source and group mapping category/label values differ")
 
 
-def _seeded_hash(seed: int, namespace: str, value: object) -> str:
-    payload = f"{seed}:{namespace}:{value}".encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
-
-
-def _group_vectors(
-    groups: pl.DataFrame,
-) -> tuple[list[tuple[str, np.ndarray]], np.ndarray]:
-    strata = sorted(
-        {
-            (str(row["category"]), int(row["label"]))
-            for row in groups.select("category", "label").iter_rows(named=True)
-        }
-    )
-    stratum_index = {value: index for index, value in enumerate(strata)}
-    counts = groups.group_by(["group_id", "category", "label"]).agg(
-        pl.len().alias("count")
-    )
-
-    vectors: dict[str, np.ndarray] = {}
-    for row in counts.iter_rows(named=True):
-        group_id = str(row["group_id"])
-        vector = vectors.setdefault(
-            group_id,
-            np.zeros(len(strata), dtype=np.int64),
-        )
-        vector[stratum_index[(str(row["category"]), int(row["label"]))]] = int(
-            row["count"]
-        )
-
-    items = list(vectors.items())
-    totals = np.sum(np.stack([vector for _, vector in items]), axis=0)
-    if np.any(totals == 0):
-        raise ValueError("every discovered stratum must contain at least one row")
-    return items, totals
-
-
 def assign_groups_to_folds(
     groups: pl.DataFrame,
     config: FoldConfig,
 ) -> dict[str, int]:
-    """Greedily minimize stratification imbalance without splitting groups."""
+    """Assign groups with sklearn's deterministic StratifiedGroupKFold."""
 
-    items, totals = _group_vectors(groups)
-    items.sort(
-        key=lambda item: (
-            -float(np.std(item[1])),
-            -int(item[1].sum()),
-            _seeded_hash(config.seed, "group", item[0]),
-        )
+    ordered = groups.select(GROUP_COLUMNS).sort(["group_id", "id"])
+    group_values = np.asarray(
+        ordered.get_column("group_id").to_list(),
+        dtype=object,
     )
-
-    fold_counts = np.zeros(
-        (config.n_splits, len(totals)),
-        dtype=np.int64,
+    strata = np.asarray(
+        [
+            f"{category}\u241f{label}"
+            for category, label in ordered.select(
+                "category", "label"
+            ).iter_rows()
+        ],
+        dtype=object,
     )
-    fold_sizes = np.zeros(config.n_splits, dtype=np.int64)
-    fold_order = sorted(
-        range(config.n_splits),
-        key=lambda fold: _seeded_hash(config.seed, "fold", fold),
+    splitter = StratifiedGroupKFold(
+        n_splits=config.n_splits,
+        shuffle=True,
+        random_state=config.seed,
     )
-    fold_rank = {fold: rank for rank, fold in enumerate(fold_order)}
     assignments: dict[str, int] = {}
+    features = np.zeros((ordered.height, 1), dtype=np.uint8)
+    for fold, (_, validation_indices) in enumerate(
+        splitter.split(features, strata, groups=group_values)
+    ):
+        for index in validation_indices:
+            group_id = str(group_values[index])
+            previous = assignments.setdefault(group_id, fold)
+            if previous != fold:
+                raise RuntimeError("StratifiedGroupKFold split one group")
 
-    for group_id, vector in items:
-        best_choice: tuple[tuple[float, int, int], int] | None = None
-        for fold in range(config.n_splits):
-            fold_counts[fold] += vector
-            imbalance = float(
-                np.mean(np.std(fold_counts / totals, axis=0))
-            )
-            fold_counts[fold] -= vector
-            score = (
-                imbalance,
-                int(fold_sizes[fold]),
-                fold_rank[fold],
-            )
-            if best_choice is None or score < best_choice[0]:
-                best_choice = (score, fold)
-
-        if best_choice is None:
-            raise RuntimeError("failed to select a fold")
-        selected_fold = best_choice[1]
-        fold_counts[selected_fold] += vector
-        fold_sizes[selected_fold] += int(vector.sum())
-        assignments[group_id] = selected_fold
-
+    expected_groups = set(map(str, group_values))
+    if set(assignments) != expected_groups:
+        raise RuntimeError("not every group received a fold")
     return assignments
 
 
@@ -346,8 +299,8 @@ def render_report(
         "",
         "- Единица разбиения — целый `group_id`, а не отдельная строка.",
         "- Балансируется сочетание `category + label`.",
-        "- Группы назначаются жадно в fold с минимальным текущим дисбалансом.",
-        f"- `seed = {config.seed}` задаёт детерминированный порядок равнозначных групп.",
+        "- Используется `sklearn.model_selection.StratifiedGroupKFold` с `shuffle=True`.",
+        f"- `seed = {config.seed}` передаётся как `random_state` для воспроизводимости.",
         "- Входные строки предварительно приводятся к стабильному порядку.",
         "",
         "## Входные данные и конфигурация",
