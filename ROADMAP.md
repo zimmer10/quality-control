@@ -29,7 +29,7 @@ Backlog → Ready → In Progress → Review → Done
 | R08 | Зафиксировать evidence schema | R03 | shared | Done |
 | R09 | Реализовать Text Rules | R05, R08 | data | Done |
 | R10 | Получить `oof/fast.parquet` | R05, R09 | data | Done |
-| R11 | Реализовать кешируемый OCR | R06 | multimodal | Backlog |
+| R11 | Реализовать кешируемый OCR | R06 | multimodal | In Progress |
 | R12 | Реализовать OCR Rules | R08, R11 | multimodal | Backlog |
 | R13 | Посчитать multimodal embeddings | R06 | multimodal | Backlog |
 | R14 | Реализовать fold-safe retrieval | R05, R13 | multimodal | Backlog |

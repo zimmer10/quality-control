@@ -20,3 +20,13 @@ PYTHONPATH=src python -m ecup.features.text
 
 Контракт колонок зафиксирован в `src/ecup/features/text.py`, а статистика
 полного прогона — в `reports/R09-text-rules.md`.
+
+`ocr_text.parquet` создаётся R11 после установки OCR-зависимостей и наличия
+разрешённой модели:
+
+```bash
+PYTHONPATH=src python -m ecup.features.ocr
+```
+
+Команду можно безопасно перезапускать: готовые результаты читаются из
+`cache/ocr/`. Для короткой проверки доступен параметр `--limit N`.

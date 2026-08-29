@@ -1,6 +1,17 @@
+version: 1
 model: PaddlePaddle/PaddleOCR-VL-1.5
+backend: transformers
+device: auto
+prompt: "OCR:"
+max_new_tokens: 512
+max_pixels: 1003520
+local_files_only: true
+
+images_root: data/raw/images
 images_manifest: data/processed/image_manifest.parquet
 cache_dir: cache/ocr
 output_path: features/ocr_text.parquet
-resume: true
+report_path: reports/R11-ocr-cache.md
 
+resume: true
+retry_errors: true
