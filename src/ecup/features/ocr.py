@@ -300,8 +300,8 @@ class PaddleOCRBackend:
             from paddleocr import PaddleOCR
         except ImportError as error:
             raise OCRBackendUnavailableError(
-                "PaddleOCR dependencies are missing. Install PaddlePaddle "
-                "for the current CUDA version, then: pip install -e '.[ocr]'"
+                "failed to import PaddleOCR runtime; check dependency and "
+                f"CUDA/NCCL compatibility: {error}"
             ) from error
         has_cuda = bool(
             paddle.is_compiled_with_cuda()
