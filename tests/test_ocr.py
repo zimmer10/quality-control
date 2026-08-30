@@ -11,22 +11,24 @@ from ecup.data.image_manifest import MANIFEST_SCHEMA
 from ecup.features.ocr import (
     OCRBackendUnavailableError,
     OCRPrediction,
-    TransformersOCRBackend,
+    PaddleOCRBackend,
     load_ocr_config,
     main,
     normalize_ocr_text,
     ocr_output_checksum,
     run_ocr,
+    select_ocr_manifest,
 )
 
 
 class FakeBackend:
-    model_id = "PaddlePaddle/PaddleOCR-VL-1.5"
+    model_id = "PP-OCRv5-mobile-ru"
     cache_signature = "test-signature-v1"
 
     def __init__(self, fail_on: str | None = None) -> None:
         self.fail_on = fail_on
         self.calls: list[str] = []
+        self.batch_calls: list[list[str]] = []
 
     def extract(self, image_path: Path) -> OCRPrediction:
         self.calls.append(image_path.name)
@@ -35,6 +37,13 @@ class FakeBackend:
         if image_path.stem == "1":
             return OCRPrediction("   ", None)
         return OCRPrediction("  БАД\n 500 мг &amp; витамин  ", 0.9)
+
+    def extract_batch(
+        self,
+        image_paths: list[Path],
+    ) -> list[OCRPrediction]:
+        self.batch_calls.append([path.name for path in image_paths])
+        return [self.extract(path) for path in image_paths]
 
 
 def sample_manifest() -> pl.DataFrame:
@@ -109,10 +118,21 @@ def write_images(root: Path) -> None:
 def test_canonical_config_and_normalization() -> None:
     config = load_ocr_config("configs/ocr.yaml")
 
-    assert config.version == 1
-    assert config.model == "PaddlePaddle/PaddleOCR-VL-1.5"
+    assert config.version == 2
+    assert config.model == "PP-OCRv5-mobile-ru"
+    assert config.max_images_per_product is None
     assert config.resume is True
     assert normalize_ocr_text("  БАД\n 500&nbsp;мг  ") == "БАД 500 мг"
+
+
+def test_selection_caps_images_per_product() -> None:
+    selected = select_ocr_manifest(sample_manifest(), 1)
+
+    assert selected.height == 2
+    assert selected.get_column("relative_path").to_list() == [
+        "10/0.jpg",
+        "11/0.jpg",
+    ]
 
 
 def test_run_writes_one_row_per_mapped_image_and_reuses_cache(
@@ -124,12 +144,19 @@ def test_run_writes_one_row_per_mapped_image_and_reuses_cache(
     write_images(images_root)
     first_backend = FakeBackend()
 
-    first = run_ocr(manifest, images_root, cache_dir, first_backend)
+    first = run_ocr(
+        manifest,
+        images_root,
+        cache_dir,
+        first_backend,
+        batch_size=2,
+    )
     second_backend = FakeBackend(fail_on="0.jpg")
     second = run_ocr(manifest, images_root, cache_dir, second_backend)
 
     assert first.frame.height == 3
     assert first_backend.calls == ["0.jpg", "1.jpg"]
+    assert first_backend.batch_calls == [["0.jpg", "1.jpg"]]
     assert first.frame.get_column("ocr_status").to_list() == [
         "ok",
         "no_text",
@@ -231,17 +258,21 @@ def test_cli_can_aggregate_a_complete_cache_without_heavy_dependencies(
             report_path=report_path,
         ),
     )
-    backend.cache_signature = TransformersOCRBackend(config).cache_signature
+    backend.cache_signature = PaddleOCRBackend(config).cache_signature
     run_ocr(manifest, images_root, cache_dir, backend)
     payload = {
         "version": config.version,
         "model": config.model,
         "backend": config.backend,
         "device": config.device,
-        "prompt": config.prompt,
-        "max_new_tokens": config.max_new_tokens,
-        "max_pixels": config.max_pixels,
-        "local_files_only": config.local_files_only,
+        "detection_model": config.detection_model,
+        "recognition_model": config.recognition_model,
+        "precision": config.precision,
+        "text_det_limit_side_len": config.text_det_limit_side_len,
+        "text_rec_score_thresh": config.text_rec_score_thresh,
+        "text_recognition_batch_size": config.text_recognition_batch_size,
+        "inference_batch_size": config.inference_batch_size,
+        "max_images_per_product": config.max_images_per_product,
         "images_root": str(config.paths.images_root),
         "images_manifest": str(config.paths.images_manifest),
         "cache_dir": str(config.paths.cache_dir),

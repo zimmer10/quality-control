@@ -2,51 +2,47 @@
 
 ## Состояние
 
-Код, схема кеша, возобновление и тесты реализованы. Проведён успешный
-GPU smoke-тест на одном реальном изображении. Полный OCR-прогон пока не
-выполнялся и R11 остаётся в статусе `In Progress`.
+OCR-пайплайн ускорен после Colab benchmark старой VL-модели. Новый smoke-тест
+и полный прогон ещё не выполнены, поэтому R11 остаётся `In Progress`.
 
-## Зафиксированный контракт
+## Почему изменён backend
+
+Старый `PaddlePaddle/PaddleOCR-VL-1.5` на Colab T4 обработал 10 изображений со
+скоростью **111,90 s/image**. Оценка полного прогона составила **64,05 дня**.
+Этот вариант непригоден для текущего объёма данных.
+
+Новая конфигурация:
+
+- detector: `PP-OCRv5_mobile_det`;
+- recognizer: `eslav_PP-OCRv5_mobile_rec`;
+- русский, английский и восточнославянский текст;
+- batch inference: 32 изображения;
+- отключены orientation classification, unwarping и textline orientation;
+- detector ограничивает большую сторону изображения до 960 px;
+- результат каждого изображения сразу записывается в возобновляемый кеш.
+
+## Контракт
 
 - Вход: `data/processed/image_manifest.parquet`, 49 456 изображений.
-- Модель: `PaddlePaddle/PaddleOCR-VL-1.5`.
-- Кеш: `cache/ocr/`, одна атомарная JSON-запись на изображение.
-- Итог: `features/ocr_text.parquet`, одна строка на изображение товара.
+- Итог: `features/ocr_text.parquet`, одна строка на каждое изображение товара.
 - Выходы: `ocr_text_by_image`, `ocr_quality`, `source_image_id` и статусы.
 - `label`, OCR Rules и итоговый verdict не используются.
-- Ошибка отдельного изображения сохраняется и не останавливает обработку.
+- Ошибка отдельного изображения сохраняется и не останавливает прогон.
 - Недоступность всего OCR backend останавливает запуск сразу.
+- Опциональный `--max-images-per-product 1` предназначен только для быстрого
+  промежуточного прогона; финальный прогон охватывает все изображения.
 
-## GPU smoke-тест
+## Запуск
 
-```yaml
-gpu: NVIDIA GeForce RTX 3050 Laptop GPU, 4 GiB
-images: 1
-max_pixels: 401408
-max_new_tokens: 256
-status: ok
-ocr_errors: 0
-ocr_seconds: 60.187
-peak_observed_gpu_memory: approximately 3 GiB
-```
+Последовательный GPU-запуск находится в `notebooks/R11_ocr_colab.ipynb`.
+Сначала он обрабатывает 100 изображений и оценивает полное время. Финальная
+ячейка защищена флагом `RUN_FULL = False`.
 
-Распознан русский и английский текст упаковки, включая прямое указание
-`A Dietary Supplement`. При такой скорости полный последовательный прогон
-занял бы около 34 дней, поэтому RTX 3050 подходит только для smoke-тестов.
-
-## Команды
-
-Готовый последовательный запуск для Google Colab находится в
-`notebooks/R11_ocr_colab.ipynb`.
-
-Короткая локальная проверка:
+Локальная проверка после установки PaddlePaddle GPU и OCR-зависимостей:
 
 ```bash
-SHARED_MODELS_PATH="$PWD/artifacts/shared_models" \
-CUDA_VISIBLE_DEVICES=0 PYTHONPATH=src \
-python -m ecup.features.ocr \
-  --limit 10 --max-pixels 401408 --max-new-tokens 256
+CUDA_VISIBLE_DEVICES=0 PYTHONPATH=src python -m ecup.features.ocr --limit 100
 ```
 
-Полный прогон необходимо выполнить на более производительной GPU. После него
-отчёт автоматически заменится фактическими статусами, checksum и временем.
+После полного Colab-прогона этот отчёт необходимо заменить автоматически
+сформированным отчётом с фактическими статусами, checksum и временем.

@@ -22,9 +22,7 @@ dev = [
   "pytest>=8.0",
 ]
 ocr = [
-  "torch>=2.2",
-  "torchvision>=0.17",
-  "transformers>=5.0.0",
+  "paddleocr==3.4.0",
 ]
 
 [tool.setuptools.packages.find]

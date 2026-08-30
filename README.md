@@ -6,8 +6,9 @@
 
 Завершены этапы R01–R10: метрика, аудит данных, финальные группы и
 folds, image manifest, визуальные дубли, evidence schema, Text Rules и
-fold-safe fast text baseline. Следующий этап быстрой ветки — Router 1 после
-получения OOF дорогой ветки.
+fold-safe fast text baseline. R11 (быстрый кешируемый OCR) реализован и ждёт
+полного GPU-прогона. Следующий этап быстрой ветки — Router 1 после получения
+OOF дорогой ветки.
 
 ## Документы
 

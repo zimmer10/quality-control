@@ -1,4 +1,4 @@
-"""Label-free OCR extraction with per-image resumable caching."""
+"""Fast label-free OCR with deterministic selection and resumable caching."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import argparse
 import hashlib
 import html
 import json
-import os
 import re
 import time
 import unicodedata
@@ -17,12 +16,11 @@ from typing import Any, Protocol
 
 import polars as pl
 import yaml
-from PIL import Image
 
 from ecup.data.image_manifest import MANIFEST_COLUMNS, MANIFEST_SCHEMA
 
 DEFAULT_CONFIG_PATH = Path("configs/ocr.yaml")
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 OCR_COLUMNS = (
     "source_image_id",
     "id",
@@ -67,10 +65,14 @@ class OCRConfig:
     model: str
     backend: str
     device: str
-    prompt: str
-    max_new_tokens: int
-    max_pixels: int
-    local_files_only: bool
+    detection_model: str
+    recognition_model: str
+    precision: str
+    text_det_limit_side_len: int
+    text_rec_score_thresh: float
+    text_recognition_batch_size: int
+    inference_batch_size: int
+    max_images_per_product: int | None
     resume: bool
     retry_errors: bool
     paths: OCRPaths
@@ -99,6 +101,7 @@ class OCRRun:
     frame: pl.DataFrame
     total_manifest_rows: int
     selected_rows: int
+    selected_products: int
     cache_hits: int
     computed_rows: int
     source_errors: int
@@ -139,10 +142,14 @@ def load_ocr_config(path: str | Path = DEFAULT_CONFIG_PATH) -> OCRConfig:
             "model",
             "backend",
             "device",
-            "prompt",
-            "max_new_tokens",
-            "max_pixels",
-            "local_files_only",
+            "detection_model",
+            "recognition_model",
+            "precision",
+            "text_det_limit_side_len",
+            "text_rec_score_thresh",
+            "text_recognition_batch_size",
+            "inference_batch_size",
+            "max_images_per_product",
             "images_root",
             "images_manifest",
             "cache_dir",
@@ -153,13 +160,15 @@ def load_ocr_config(path: str | Path = DEFAULT_CONFIG_PATH) -> OCRConfig:
         },
         "ocr",
     )
-    if root["version"] != 1 or type(root["version"]) is not int:
-        raise ValueError("ocr.version must be integer 1")
+    if root["version"] != 2 or type(root["version"]) is not int:
+        raise ValueError("ocr.version must be integer 2")
     for key in (
         "model",
         "backend",
         "device",
-        "prompt",
+        "detection_model",
+        "recognition_model",
+        "precision",
         "images_root",
         "images_manifest",
         "cache_dir",
@@ -168,33 +177,53 @@ def load_ocr_config(path: str | Path = DEFAULT_CONFIG_PATH) -> OCRConfig:
     ):
         if not isinstance(root[key], str) or not root[key].strip():
             raise ValueError(f"ocr.{key} must be a non-empty string")
-    if root["backend"] != "transformers":
-        raise ValueError("ocr.backend must be transformers")
+    if root["backend"] != "paddleocr":
+        raise ValueError("ocr.backend must be paddleocr")
     if root["device"] not in {"auto", "cpu", "cuda"}:
         raise ValueError("ocr.device must be auto, cpu or cuda")
-    for key in ("max_new_tokens", "max_pixels"):
+    if root["precision"] not in {"fp32", "fp16"}:
+        raise ValueError("ocr.precision must be fp32 or fp16")
+    for key in (
+        "text_det_limit_side_len",
+        "text_recognition_batch_size",
+        "inference_batch_size",
+    ):
         if type(root[key]) is not int or root[key] <= 0:
             raise ValueError(f"ocr.{key} must be a positive integer")
-    for key in ("local_files_only", "resume", "retry_errors"):
+    image_limit = root["max_images_per_product"]
+    if image_limit is not None and (
+        type(image_limit) is not int or image_limit <= 0
+    ):
+        raise ValueError(
+            "ocr.max_images_per_product must be null or a positive integer"
+        )
+    score_threshold = root["text_rec_score_thresh"]
+    if type(score_threshold) not in {int, float} or not 0 <= score_threshold <= 1:
+        raise ValueError("ocr.text_rec_score_thresh must be within [0, 1]")
+    for key in ("resume", "retry_errors"):
         if type(root[key]) is not bool:
             raise ValueError(f"ocr.{key} must be boolean")
     return OCRConfig(
-        version=1,
-        model=root["model"],
-        backend=root["backend"],
-        device=root["device"],
-        prompt=root["prompt"],
-        max_new_tokens=root["max_new_tokens"],
-        max_pixels=root["max_pixels"],
-        local_files_only=root["local_files_only"],
-        resume=root["resume"],
-        retry_errors=root["retry_errors"],
+        version=2,
+        model=str(root["model"]),
+        backend=str(root["backend"]),
+        device=str(root["device"]),
+        detection_model=str(root["detection_model"]),
+        recognition_model=str(root["recognition_model"]),
+        precision=str(root["precision"]),
+        text_det_limit_side_len=int(root["text_det_limit_side_len"]),
+        text_rec_score_thresh=float(score_threshold),
+        text_recognition_batch_size=int(root["text_recognition_batch_size"]),
+        inference_batch_size=int(root["inference_batch_size"]),
+        max_images_per_product=image_limit,
+        resume=bool(root["resume"]),
+        retry_errors=bool(root["retry_errors"]),
         paths=OCRPaths(
-            images_root=Path(root["images_root"]),
-            images_manifest=Path(root["images_manifest"]),
-            cache_dir=Path(root["cache_dir"]),
-            output_path=Path(root["output_path"]),
-            report_path=Path(root["report_path"]),
+            images_root=Path(str(root["images_root"])),
+            images_manifest=Path(str(root["images_manifest"])),
+            cache_dir=Path(str(root["cache_dir"])),
+            output_path=Path(str(root["output_path"])),
+            report_path=Path(str(root["report_path"])),
         ),
     )
 
@@ -217,30 +246,42 @@ def validate_image_manifest(manifest: pl.DataFrame) -> None:
         raise ValueError("image manifest relative_path values must be unique")
 
 
-def _model_source(model_id: str, local_files_only: bool) -> str:
-    shared_root = Path(os.environ.get("SHARED_MODELS_PATH", "/shared_models"))
-    shared_path = shared_root / model_id
-    if shared_path.exists():
-        return str(shared_path)
-    if local_files_only:
-        raise OCRBackendUnavailableError(
-            f"OCR model is absent: {shared_path}. Set SHARED_MODELS_PATH "
-            "or download the model locally."
+def select_ocr_manifest(
+    manifest: pl.DataFrame,
+    max_images_per_product: int | None,
+) -> pl.DataFrame:
+    """Choose readable images first and cap work deterministically per item."""
+
+    validate_image_manifest(manifest)
+    if max_images_per_product is not None and max_images_per_product <= 0:
+        raise ValueError("max_images_per_product must be positive")
+    selected = (
+        manifest.filter(pl.col("in_dataset"))
+        .with_columns(
+            (pl.col("status") != "ok").cast(pl.Int8).alias("_source_error")
         )
-    return model_id
+        .sort(["id", "_source_error", "image_index", "relative_path"])
+    )
+    if max_images_per_product is not None:
+        selected = selected.group_by("id", maintain_order=True).head(
+            max_images_per_product
+        )
+    return selected.drop("_source_error").sort("relative_path")
 
 
-class TransformersOCRBackend:
-    """Lazy Hugging Face backend for the allowed PaddleOCR-VL model."""
+class PaddleOCRBackend:
+    """Fast PP-OCRv5 Mobile detector and East-Slavic recognizer."""
 
     def __init__(self, config: OCRConfig) -> None:
         self.model_id = config.model
         signature_payload = {
+            "version": CACHE_VERSION,
             "backend": config.backend,
-            "model": config.model,
-            "prompt": config.prompt,
-            "max_new_tokens": config.max_new_tokens,
-            "max_pixels": config.max_pixels,
+            "detection_model": config.detection_model,
+            "recognition_model": config.recognition_model,
+            "precision": config.precision,
+            "text_det_limit_side_len": config.text_det_limit_side_len,
+            "text_rec_score_thresh": config.text_rec_score_thresh,
         }
         self.cache_signature = json.dumps(
             signature_payload,
@@ -249,101 +290,118 @@ class TransformersOCRBackend:
             separators=(",", ":"),
         )
         self._config = config
-        self._processor: Any = None
-        self._model: Any = None
-        self._torch: Any = None
-        self._device: str | None = None
+        self._pipeline: Any = None
 
     def _load(self) -> None:
-        if self._model is not None:
+        if self._pipeline is not None:
             return
         try:
-            import torch
-            from transformers import AutoModelForImageTextToText, AutoProcessor
+            import paddle
+            from paddleocr import PaddleOCR
         except ImportError as error:
             raise OCRBackendUnavailableError(
-                "OCR dependencies are missing. Install with: "
-                "pip install -e '.[ocr]'"
+                "PaddleOCR dependencies are missing. Install PaddlePaddle "
+                "for the current CUDA version, then: pip install -e '.[ocr]'"
             ) from error
-        source = _model_source(
-            self._config.model,
-            self._config.local_files_only,
+        has_cuda = bool(
+            paddle.is_compiled_with_cuda()
+            and paddle.device.cuda.device_count() > 0
         )
         if self._config.device == "auto":
-            device = "cuda" if torch.cuda.is_available() else "cpu"
+            device = "gpu:0" if has_cuda else "cpu"
+        elif self._config.device == "cuda":
+            if not has_cuda:
+                raise OCRBackendUnavailableError(
+                    "CUDA was requested but PaddlePaddle GPU is unavailable"
+                )
+            device = "gpu:0"
         else:
-            device = self._config.device
-        if device == "cuda" and not torch.cuda.is_available():
-            raise OCRBackendUnavailableError(
-                "CUDA was requested but is unavailable"
-            )
-        if device == "cuda":
-            dtype = (
-                torch.bfloat16
-                if torch.cuda.is_bf16_supported()
-                else torch.float16
-            )
-        else:
-            dtype = torch.float32
+            device = "cpu"
+        precision = (
+            self._config.precision if device.startswith("gpu") else "fp32"
+        )
         try:
-            self._processor = AutoProcessor.from_pretrained(
-                source,
-                local_files_only=self._config.local_files_only,
+            self._pipeline = PaddleOCR(
+                text_detection_model_name=self._config.detection_model,
+                text_recognition_model_name=self._config.recognition_model,
+                text_recognition_batch_size=(
+                    self._config.text_recognition_batch_size
+                ),
+                use_doc_orientation_classify=False,
+                use_doc_unwarping=False,
+                use_textline_orientation=False,
+                text_det_limit_side_len=self._config.text_det_limit_side_len,
+                text_det_limit_type="max",
+                text_rec_score_thresh=self._config.text_rec_score_thresh,
+                device=device,
+                engine="paddle_static",
+                precision=precision,
             )
-            self._model = AutoModelForImageTextToText.from_pretrained(
-                source,
-                local_files_only=self._config.local_files_only,
-                dtype=dtype,
-            ).to(device)
         except Exception as error:
             raise OCRBackendUnavailableError(
-                f"failed to load OCR model {self._config.model}: {error}"
+                f"failed to initialize {self.model_id}: {error}"
             ) from error
-        self._model.eval()
-        self._torch = torch
-        self._device = device
+
+    def extract_batch(
+        self,
+        image_paths: Sequence[Path],
+    ) -> list[OCRPrediction]:
+        self._load()
+        if not image_paths:
+            return []
+        try:
+            results = list(
+                self._pipeline.predict([str(path) for path in image_paths])
+            )
+        except Exception as error:
+            raise RuntimeError(f"PaddleOCR inference failed: {error}") from error
+        if len(results) != len(image_paths):
+            raise RuntimeError(
+                "PaddleOCR returned an unexpected number of results"
+            )
+        predictions: list[OCRPrediction] = []
+        for result in results:
+            payload = result.json
+            if not isinstance(payload, Mapping):
+                raise RuntimeError("PaddleOCR result.json must be a mapping")
+            values = payload.get("res", payload)
+            if not isinstance(values, Mapping):
+                raise RuntimeError("PaddleOCR result payload is invalid")
+            texts = values.get("rec_texts", [])
+            scores = values.get("rec_scores", [])
+            if isinstance(texts, (str, bytes)):
+                raise RuntimeError("PaddleOCR rec_texts is invalid")
+            try:
+                text_values = list(texts)
+            except TypeError as error:
+                raise RuntimeError(
+                    "PaddleOCR rec_texts is invalid"
+                ) from error
+            normalized = []
+            for text in text_values:
+                value = normalize_ocr_text(text)
+                if value:
+                    normalized.append(value)
+            numeric_scores = []
+            for score in scores:
+                try:
+                    value = float(score)
+                except (TypeError, ValueError):
+                    continue
+                if 0.0 <= value <= 1.0:
+                    numeric_scores.append(value)
+            quality = (
+                sum(numeric_scores) / len(numeric_scores)
+                if numeric_scores
+                else None
+            )
+            predictions.append(
+                OCRPrediction(text="\n".join(normalized), quality=quality)
+            )
+        return predictions
 
     def extract(self, image_path: Path) -> OCRPrediction:
-        self._load()
-        with Image.open(image_path) as opened:
-            image = opened.convert("RGB")
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "image": image},
-                    {"type": "text", "text": self._config.prompt},
-                ],
-            }
-        ]
-        image_processor = self._processor.image_processor
-        shortest_edge = getattr(image_processor, "min_pixels", None)
-        if shortest_edge is None:
-            shortest_edge = image_processor.size.shortest_edge
-        inputs = self._processor.apply_chat_template(
-            messages,
-            add_generation_prompt=True,
-            tokenize=True,
-            return_dict=True,
-            return_tensors="pt",
-            images_kwargs={
-                "size": {
-                    "shortest_edge": shortest_edge,
-                    "longest_edge": self._config.max_pixels,
-                }
-            },
-        )
-        inputs = inputs.to(self._device)
-        input_length = int(inputs["input_ids"].shape[1])
-        with self._torch.inference_mode():
-            generated = self._model.generate(
-                **inputs,
-                max_new_tokens=self._config.max_new_tokens,
-                do_sample=False,
-            )
-        generated_only = generated[0][input_length:-1]
-        text = self._processor.decode(generated_only)
-        return OCRPrediction(text=normalize_ocr_text(text), quality=None)
+        return self.extract_batch([image_path])[0]
 
 
 def _cache_key(row: Mapping[str, object], signature: str) -> str:
@@ -471,7 +529,9 @@ def validate_ocr_output(
     no_text = output.filter(pl.col("ocr_status") == "no_text")
     if no_text.filter(pl.col("ocr_text_by_image") != "").height:
         raise ValueError("no_text OCR rows must have empty text")
-    failed = output.filter(pl.col("ocr_status").is_in(["source_error", "ocr_error"]))
+    failed = output.filter(
+        pl.col("ocr_status").is_in(["source_error", "ocr_error"])
+    )
     if failed.filter(pl.col("ocr_error").is_null()).height:
         raise ValueError("failed OCR rows must contain an error")
     invalid_quality = output.filter(
@@ -481,15 +541,50 @@ def validate_ocr_output(
     if invalid_quality.height:
         raise ValueError("ocr_quality must be null or within [0, 1]")
     expected = selected_manifest.select(
-        "id",
-        "image_index",
-        "relative_path",
+        "id", "image_index", "relative_path"
     ).sort("relative_path")
     actual = output.select("id", "image_index", "relative_path").sort(
         "relative_path"
     )
     if not expected.equals(actual):
         raise ValueError("OCR output is misaligned with image manifest")
+
+
+def _batch_predictions(
+    backend: OCRBackend,
+    image_paths: Sequence[Path],
+) -> list[OCRPrediction | Exception]:
+    batch_method = getattr(backend, "extract_batch", None)
+    if batch_method is None:
+        results: list[OCRPrediction | Exception] = []
+        for path in image_paths:
+            try:
+                results.append(backend.extract(path))
+            except OCRBackendUnavailableError:
+                raise
+            except Exception as error:
+                results.append(error)
+        return results
+    try:
+        predictions = list(batch_method(image_paths))
+        if len(predictions) != len(image_paths):
+            raise RuntimeError("OCR batch result length mismatch")
+        return predictions
+    except OCRBackendUnavailableError:
+        raise
+    except Exception:
+        results = []
+        for path in image_paths:
+            try:
+                one = list(batch_method([path]))
+                if len(one) != 1:
+                    raise RuntimeError("OCR single result length mismatch")
+                results.append(one[0])
+            except OCRBackendUnavailableError:
+                raise
+            except Exception as error:
+                results.append(error)
+        return results
 
 
 def run_ocr(
@@ -502,55 +597,41 @@ def run_ocr(
     retry_errors: bool = True,
     limit: int | None = None,
     progress_every: int = 0,
+    batch_size: int = 1,
+    max_images_per_product: int | None = None,
 ) -> OCRRun:
-    """Process mapped images, writing an atomic cache record per image."""
+    """Process selected images in batches with an atomic cache per image."""
 
-    validate_image_manifest(manifest)
     if limit is not None and limit <= 0:
         raise ValueError("limit must be a positive integer")
     if progress_every < 0:
         raise ValueError("progress_every must be non-negative")
-    selected = manifest.filter(pl.col("in_dataset")).sort("relative_path")
+    if batch_size <= 0:
+        raise ValueError("batch_size must be a positive integer")
+    selected = select_ocr_manifest(manifest, max_images_per_product)
     if limit is not None:
         selected = selected.head(limit)
     root = Path(images_root)
     cache_root = Path(cache_dir)
-    rows: list[dict[str, object]] = []
+    rows_by_path: dict[str, dict[str, object]] = {}
+    pending: list[tuple[dict[str, object], str, Path]] = []
     cache_hits = 0
-    computed = 0
     source_errors = 0
     started = time.perf_counter()
 
-    def show_progress(position: int) -> None:
-        if progress_every and (
-            position % progress_every == 0 or position == selected.height
-        ):
-            elapsed = time.perf_counter() - started
-            print(
-                f"OCR progress: {position}/{selected.height}, "
-                f"cached={cache_hits}, computed={computed}, "
-                f"elapsed={elapsed:.1f}s",
-                flush=True,
-            )
-
-    for position, source in enumerate(
-        selected.iter_rows(named=True),
-        start=1,
-    ):
+    for source in selected.iter_rows(named=True):
         key = _cache_key(source, backend.cache_signature)
         cache_path = _cache_path(cache_root, key)
+        relative_path = str(source["relative_path"])
         if source["status"] != "ok":
             source_errors += 1
-            rows.append(
-                _result_row(
-                    source,
-                    backend.model_id,
-                    key,
-                    "source_error",
-                    error=str(source["error"] or "image manifest error"),
-                )
+            rows_by_path[relative_path] = _result_row(
+                source,
+                backend.model_id,
+                key,
+                "source_error",
+                error=str(source["error"] or "image manifest error"),
             )
-            show_progress(position)
             continue
         cached = (
             _read_cache(cache_path, key, backend.cache_signature)
@@ -560,48 +641,81 @@ def run_ocr(
         if cached is not None and (
             cached["ocr_status"] in SUCCESS_STATUSES or not retry_errors
         ):
-            rows.append(cached)
+            rows_by_path[relative_path] = cached
             cache_hits += 1
-            show_progress(position)
-            continue
-        computed += 1
-        try:
-            prediction = backend.extract(root / str(source["relative_path"]))
-            text = normalize_ocr_text(prediction.text)
-            quality = prediction.quality
-            if quality is not None and not 0.0 <= quality <= 1.0:
-                raise ValueError("backend quality must be within [0, 1]")
-            row = _result_row(
-                source,
-                backend.model_id,
-                key,
-                "ok" if text else "no_text",
-                text=text,
-                quality=quality,
-            )
-        except OCRBackendUnavailableError:
-            raise
-        except Exception as error:
-            message = f"{type(error).__name__}: {error}"[:2000]
-            row = _result_row(
-                source,
-                backend.model_id,
-                key,
-                "ocr_error",
-                error=message,
-            )
-        _write_cache(cache_path, key, backend.cache_signature, row)
-        rows.append(row)
-        show_progress(position)
+        else:
+            pending.append((source, key, cache_path))
 
-    output = _frame_from_rows(rows)
+    completed = len(rows_by_path)
+    last_reported = 0
+
+    def show_progress(*, force: bool = False) -> None:
+        nonlocal last_reported
+        if progress_every and (
+            force or completed - last_reported >= progress_every
+        ):
+            elapsed = time.perf_counter() - started
+            print(
+                f"OCR progress: {completed}/{selected.height}, "
+                f"cached={cache_hits}, computed={completed - cache_hits - source_errors}, "
+                f"elapsed={elapsed:.1f}s",
+                flush=True,
+            )
+            last_reported = completed
+
+    if completed and not pending:
+        show_progress(force=True)
+    for offset in range(0, len(pending), batch_size):
+        batch = pending[offset : offset + batch_size]
+        paths = [root / str(item[0]["relative_path"]) for item in batch]
+        predictions = _batch_predictions(backend, paths)
+        for item, prediction in zip(batch, predictions, strict=True):
+            source, key, cache_path = item
+            relative_path = str(source["relative_path"])
+            if isinstance(prediction, Exception):
+                row = _result_row(
+                    source,
+                    backend.model_id,
+                    key,
+                    "ocr_error",
+                    error=(
+                        f"{type(prediction).__name__}: {prediction}"
+                    )[:2000],
+                )
+            else:
+                text = normalize_ocr_text(prediction.text)
+                quality = prediction.quality
+                if quality is not None and not 0.0 <= quality <= 1.0:
+                    row = _result_row(
+                        source,
+                        backend.model_id,
+                        key,
+                        "ocr_error",
+                        error="ValueError: backend quality must be within [0, 1]",
+                    )
+                else:
+                    row = _result_row(
+                        source,
+                        backend.model_id,
+                        key,
+                        "ok" if text else "no_text",
+                        text=text,
+                        quality=quality,
+                    )
+            _write_cache(cache_path, key, backend.cache_signature, row)
+            rows_by_path[relative_path] = row
+            completed += 1
+        show_progress(force=completed == selected.height)
+
+    output = _frame_from_rows(list(rows_by_path.values()))
     validate_ocr_output(selected, output)
     return OCRRun(
         frame=output,
         total_manifest_rows=manifest.height,
         selected_rows=selected.height,
+        selected_products=selected.get_column("id").n_unique(),
         cache_hits=cache_hits,
-        computed_rows=computed,
+        computed_rows=len(pending),
         source_errors=source_errors,
         ocr_errors=output.filter(pl.col("ocr_status") == "ocr_error").height,
         elapsed_seconds=time.perf_counter() - started,
@@ -631,14 +745,22 @@ def render_ocr_report(
         "",
         "## Контракт",
         "",
-        f"- Модель: `{config.model}`.",
+        f"- Backend: `{config.backend}`.",
+        f"- Детектор: `{config.detection_model}`.",
+        f"- Распознавание: `{config.recognition_model}`.",
         f"- Image manifest: `{config.paths.images_manifest}`.",
         f"- Кеш: `{config.paths.cache_dir}`.",
         f"- Итоговая таблица: `{output_path}`.",
         f"- Строк в исходном manifest: **{run.total_manifest_rows}**.",
-        f"- Строк в текущем запуске: **{run.selected_rows}**.",
+        f"- Товаров в текущем запуске: **{run.selected_products}**.",
+        f"- Изображений в текущем запуске: **{run.selected_rows}**.",
+        "- Максимум изображений товара: **все**."
+        if config.max_images_per_product is None
+        else (
+            "- Максимум изображений товара: "
+            f"**{config.max_images_per_product}**."
+        ),
         f"- Логическая SHA-256: `{ocr_output_checksum(run.frame)}`.",
-        "- Одна строка соответствует одному изображению товара.",
         "- Label, OCR Rules и финальный verdict не используются.",
         "",
         "## Статусы",
@@ -669,7 +791,7 @@ def render_ocr_report(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Extract and cache label-free OCR for product images"
+        description="Extract and cache fast label-free OCR for product images"
     )
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
     parser.add_argument("--manifest", type=Path)
@@ -678,9 +800,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--report", type=Path)
     parser.add_argument("--limit", type=int)
-    parser.add_argument("--max-pixels", type=int)
-    parser.add_argument("--max-new-tokens", type=int)
-    parser.add_argument("--progress-every", type=int, default=25)
+    parser.add_argument("--batch-size", type=int)
+    parser.add_argument("--max-images-per-product", type=int)
+    parser.add_argument("--all-images", action="store_true")
+    parser.add_argument("--progress-every", type=int, default=100)
     parser.add_argument("--no-resume", action="store_true")
     return parser
 
@@ -689,8 +812,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = load_ocr_config(args.config)
     for name, value in (
-        ("max_pixels", args.max_pixels),
-        ("max_new_tokens", args.max_new_tokens),
+        ("inference_batch_size", args.batch_size),
+        ("max_images_per_product", args.max_images_per_product),
     ):
         if value is not None:
             if value <= 0:
@@ -702,7 +825,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     output_path = args.output or config.paths.output_path
     report_path = args.report or config.paths.report_path
     manifest = pl.read_parquet(manifest_path)
-    backend = TransformersOCRBackend(config)
+    backend = PaddleOCRBackend(config)
     run = run_ocr(
         manifest,
         images_root,
@@ -712,6 +835,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         retry_errors=config.retry_errors,
         limit=args.limit,
         progress_every=args.progress_every,
+        batch_size=config.inference_batch_size,
+        max_images_per_product=(
+            None if args.all_images else config.max_images_per_product
+        ),
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -722,7 +849,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     print(
         f"OCR complete: {run.selected_rows} images, "
-        f"{run.cache_hits} cached, {run.ocr_errors} OCR errors"
+        f"{run.cache_hits} cached, {run.ocr_errors} OCR errors, "
+        f"{run.elapsed_seconds:.1f}s",
+        flush=True,
     )
     return 0
 

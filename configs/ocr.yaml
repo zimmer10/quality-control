@@ -1,11 +1,15 @@
-version: 1
-model: PaddlePaddle/PaddleOCR-VL-1.5
-backend: transformers
+version: 2
+model: PP-OCRv5-mobile-ru
+backend: paddleocr
 device: auto
-prompt: "OCR:"
-max_new_tokens: 512
-max_pixels: 1003520
-local_files_only: true
+detection_model: PP-OCRv5_mobile_det
+recognition_model: eslav_PP-OCRv5_mobile_rec
+precision: fp32
+text_det_limit_side_len: 960
+text_rec_score_thresh: 0.15
+text_recognition_batch_size: 32
+inference_batch_size: 32
+max_images_per_product: null
 
 images_root: data/raw/images
 images_manifest: data/processed/image_manifest.parquet
