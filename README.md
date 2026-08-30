@@ -22,6 +22,7 @@ fold-safe fast text baseline. Следующий этап быстрой вет�
 
 ```text
 configs/       конфигурации этапов
+notebooks/     воспроизводимые Colab-запуски
 src/ecup/      исходный код
 tests/         автоматические проверки
 reports/       небольшие отчёты

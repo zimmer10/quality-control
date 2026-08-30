@@ -277,7 +277,14 @@ class TransformersOCRBackend:
             raise OCRBackendUnavailableError(
                 "CUDA was requested but is unavailable"
             )
-        dtype = torch.bfloat16 if device == "cuda" else torch.float32
+        if device == "cuda":
+            dtype = (
+                torch.bfloat16
+                if torch.cuda.is_bf16_supported()
+                else torch.float16
+            )
+        else:
+            dtype = torch.float32
         try:
             self._processor = AutoProcessor.from_pretrained(
                 source,
@@ -494,12 +501,15 @@ def run_ocr(
     resume: bool = True,
     retry_errors: bool = True,
     limit: int | None = None,
+    progress_every: int = 0,
 ) -> OCRRun:
     """Process mapped images, writing an atomic cache record per image."""
 
     validate_image_manifest(manifest)
     if limit is not None and limit <= 0:
         raise ValueError("limit must be a positive integer")
+    if progress_every < 0:
+        raise ValueError("progress_every must be non-negative")
     selected = manifest.filter(pl.col("in_dataset")).sort("relative_path")
     if limit is not None:
         selected = selected.head(limit)
@@ -511,7 +521,22 @@ def run_ocr(
     source_errors = 0
     started = time.perf_counter()
 
-    for source in selected.iter_rows(named=True):
+    def show_progress(position: int) -> None:
+        if progress_every and (
+            position % progress_every == 0 or position == selected.height
+        ):
+            elapsed = time.perf_counter() - started
+            print(
+                f"OCR progress: {position}/{selected.height}, "
+                f"cached={cache_hits}, computed={computed}, "
+                f"elapsed={elapsed:.1f}s",
+                flush=True,
+            )
+
+    for position, source in enumerate(
+        selected.iter_rows(named=True),
+        start=1,
+    ):
         key = _cache_key(source, backend.cache_signature)
         cache_path = _cache_path(cache_root, key)
         if source["status"] != "ok":
@@ -525,6 +550,7 @@ def run_ocr(
                     error=str(source["error"] or "image manifest error"),
                 )
             )
+            show_progress(position)
             continue
         cached = (
             _read_cache(cache_path, key, backend.cache_signature)
@@ -536,6 +562,7 @@ def run_ocr(
         ):
             rows.append(cached)
             cache_hits += 1
+            show_progress(position)
             continue
         computed += 1
         try:
@@ -565,6 +592,7 @@ def run_ocr(
             )
         _write_cache(cache_path, key, backend.cache_signature, row)
         rows.append(row)
+        show_progress(position)
 
     output = _frame_from_rows(rows)
     validate_ocr_output(selected, output)
@@ -652,6 +680,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", type=int)
     parser.add_argument("--max-pixels", type=int)
     parser.add_argument("--max-new-tokens", type=int)
+    parser.add_argument("--progress-every", type=int, default=25)
     parser.add_argument("--no-resume", action="store_true")
     return parser
 
@@ -682,6 +711,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         resume=config.resume and not args.no_resume,
         retry_errors=config.retry_errors,
         limit=args.limit,
+        progress_every=args.progress_every,
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.parent.mkdir(parents=True, exist_ok=True)

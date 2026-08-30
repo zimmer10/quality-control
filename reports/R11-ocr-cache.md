@@ -36,6 +36,9 @@ peak_observed_gpu_memory: approximately 3 GiB
 
 ## Команды
 
+Готовый последовательный запуск для Google Colab находится в
+`notebooks/R11_ocr_colab.ipynb`.
+
 Короткая локальная проверка:
 
 ```bash
