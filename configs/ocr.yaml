@@ -9,7 +9,7 @@ text_det_limit_side_len: 960
 text_rec_score_thresh: 0.15
 text_recognition_batch_size: 32
 inference_batch_size: 32
-max_images_per_product: null
+max_images_per_product: 1
 
 images_root: data/raw/images
 images_manifest: data/processed/image_manifest.parquet

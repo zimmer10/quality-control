@@ -120,7 +120,7 @@ def test_canonical_config_and_normalization() -> None:
 
     assert config.version == 2
     assert config.model == "PP-OCRv5-mobile-ru"
-    assert config.max_images_per_product is None
+    assert config.max_images_per_product == 1
     assert config.resume is True
     assert normalize_ocr_text("  БАД\n 500&nbsp;мг  ") == "БАД 500 мг"
 
@@ -289,5 +289,5 @@ def test_cli_can_aggregate_a_complete_cache_without_heavy_dependencies(
     )
 
     assert main(["--config", str(config_path)]) == 0
-    assert pl.read_parquet(output_path).height == 3
+    assert pl.read_parquet(output_path).height == 2
     assert "# R11 — кешируемый OCR" in report_path.read_text(encoding="utf-8")
