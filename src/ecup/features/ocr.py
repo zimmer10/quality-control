@@ -334,7 +334,6 @@ class PaddleOCRBackend:
                 text_det_limit_type="max",
                 text_rec_score_thresh=self._config.text_rec_score_thresh,
                 device=device,
-                engine="paddle_static",
                 precision=precision,
             )
         except Exception as error:
