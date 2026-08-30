@@ -31,7 +31,7 @@ Backlog → Ready → In Progress → Review → Done
 | R10 | Получить `oof/fast.parquet` | R05, R09 | data | Done |
 | R11 | Реализовать кешируемый OCR | R06 | multimodal | Backlog |
 | R12 | Реализовать OCR Rules | R08, R11 | multimodal | Backlog |
-| R13 | Посчитать multimodal embeddings | R06 | multimodal | Backlog |
+| R13 | Посчитать multimodal embeddings | R06 | multimodal | In Progress |
 | R14 | Реализовать fold-safe retrieval | R05, R13 | multimodal | Backlog |
 | R15 | Получить `oof/expensive.parquet` | R12, R13, R14 | multimodal | Backlog |
 | R16 | Собрать LoRA dataset v1 | R08, R09, R12 | multimodal | Backlog |

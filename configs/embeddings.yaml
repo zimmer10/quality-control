@@ -1,11 +1,16 @@
+version: 1
 model: Qwen/Qwen3-VL-Embedding-2B
+backend: sentence-transformers
+device: auto
+instruction: Represent this product for product quality and compliance classification.
+embedding_dim: 2048
+batch_size: 1
+local_files_only: true
+normalize: true
+resume: true
+data_path: data/raw/data.csv
+images_root: data/raw/images
 images_manifest: data/processed/image_manifest.parquet
-folds_path: data/processed/folds.parquet
 cache_dir: cache/embeddings
-features_path: features/embeddings.parquet
-oof_path: oof/expensive.parquet
-
-retrieval:
-  fold_safe: true
-  neighbors: [3, 5, 10]
-
+output_path: features/embeddings.parquet
+report_path: reports/R13-embeddings.md

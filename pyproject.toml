@@ -21,6 +21,13 @@ dependencies = [
 dev = [
   "pytest>=8.0",
 ]
+embeddings = [
+  "qwen-vl-utils>=0.0.14",
+  "sentence-transformers>=5.4.0",
+  "torch>=2.8",
+  "torchvision>=0.23",
+  "transformers>=4.57.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
